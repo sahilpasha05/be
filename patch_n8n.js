@@ -5,103 +5,122 @@ const outputPath = '/Users/sahilsmbp/Desktop/n8n-cloud-ready.json';
 
 const wf = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
 
-const IP = 'http://YOUR_VPS_IP:3000';
+const IP = 'https://be-q3nc.onrender.com';
 
-const codeMap = {
-  "03 — Text Extraction": `
-const input = $input.first().json;
-const data = $input.first().binary.brief_file.data;
-const body = {
-  fileExt: $json.fileExt,
-  executionId: $execution.id,
-  base64Data: data
-};
-try {
-  const result = await $helpers.httpRequest({
-    method: 'POST',
-    url: '${IP}/extract-text',
-    body: body,
-    json: true
-  });
-  return [{ json: { ...input, stdout: result.stdout, stderr: result.stderr, returncode: result.returncode } }];
-} catch (e) {
-  return [{ json: { ...input, stdout: '', stderr: e.message, returncode: 1 } }];
-}
-`,
-  "02c — Shell Extract Supporting Docs": `
-const input = $input.first().json;
-const fileKey = $json.supportingFileKey;
-const data = $input.first().binary[fileKey].data;
-const body = {
-  fileExt: $json.supportingFileExt,
-  executionId: $execution.id,
-  base64Data: data
-};
-try {
-  const result = await $helpers.httpRequest({
-    method: 'POST',
-    url: '${IP}/extract-text',
-    body: body,
-    json: true
-  });
-  return [{ json: { ...input, stdout: result.stdout, stderr: result.stderr, returncode: result.returncode } }];
-} catch(e) {
-  return [{ json: { ...input, stdout: '', stderr: e.message, returncode: 1 } }];
-}
-`,
-  "34b — Install Dependencies": `
-const input = $input.first().json;
-return [{ json: { ...input, stdout: 'DEPS_OK', returncode: 0 } }];
-`,
-  "34c — Generate Charts (matplotlib)": `
-const input = $input.first().json;
+// Convert Code nodes that need binary data into HTTP Request nodes
+wf.nodes.forEach(node => {
+    // --- 03 — Text Extraction: Convert to HTTP Request node ---
+    if (node.name === '03 — Text Extraction') {
+        node.type = 'n8n-nodes-base.httpRequest';
+        node.typeVersion = 4.2;
+        node.parameters = {
+            method: 'POST',
+            url: `${IP}/extract-text`,
+            sendBody: true,
+            contentType: 'multipart-form-data',
+            bodyParameters: {
+                parameters: [
+                    {
+                        parameterType: 'formBinaryData',
+                        name: 'file',
+                        inputDataFieldName: 'brief_file'
+                    },
+                    {
+                        parameterType: 'formData',
+                        name: 'fileExt',
+                        value: '={{ $json.fileExt }}'
+                    },
+                    {
+                        parameterType: 'formData',
+                        name: 'executionId',
+                        value: '={{ $json.executionId }}'
+                    }
+                ]
+            },
+            options: {
+                timeout: 120000
+            }
+        };
+    }
+
+    // --- 02c — Shell Extract Supporting Docs: Convert to HTTP Request node ---
+    if (node.name === '02c — Shell Extract Supporting Docs') {
+        node.type = 'n8n-nodes-base.httpRequest';
+        node.typeVersion = 4.2;
+        node.parameters = {
+            method: 'POST',
+            url: `${IP}/extract-text`,
+            sendBody: true,
+            contentType: 'multipart-form-data',
+            bodyParameters: {
+                parameters: [
+                    {
+                        parameterType: 'formBinaryData',
+                        name: 'file',
+                        inputDataFieldName: '={{ $json.supportingFileKey }}'
+                    },
+                    {
+                        parameterType: 'formData',
+                        name: 'fileExt',
+                        value: '={{ $json.supportingFileExt }}'
+                    },
+                    {
+                        parameterType: 'formData',
+                        name: 'executionId',
+                        value: '={{ $execution.id }}'
+                    }
+                ]
+            },
+            options: {
+                timeout: 120000
+            }
+        };
+    }
+
+    // --- 34b — Install Dependencies: simplify ---
+    if (node.name === '34b — Install Dependencies' && node.type === 'n8n-nodes-base.code') {
+        node.parameters.jsCode = `const input = $input.first().json;\nreturn [{ json: { ...input, stdout: 'DEPS_OK', returncode: 0 } }];`;
+    }
+
+    // --- 34c — Generate Charts: HTTP POST to Render ---
+    if (node.name === '34c — Generate Charts (matplotlib)' && node.type === 'n8n-nodes-base.code') {
+        node.parameters.jsCode = `const input = $input.first().json;
 try {
   const result = await $helpers.httpRequest({
     method: 'POST',
     url: '${IP}/generate-charts',
-    body: Object.assign({}, input, { executionId: $json.executionId }),
-    json: true
+    body: { executionId: input.executionId, docSections: input.docSections, workableTask: input.workableTask, fullDocumentText: (input.fullDocumentText || '').substring(0, 3000) },
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120000
   });
-  return [{ json: { ...input, stdout: result.stdout, stderr: result.stderr, returncode: result.returncode } }];
+  return [{ json: { ...input, stdout: result.stdout || '', stderr: result.stderr || '', returncode: result.returncode || 0 } }];
 } catch(e) {
   return [{ json: { ...input, stdout: '', stderr: e.message, returncode: 1 } }];
-}
-`,
-  "35 — Export DOCX": `
-const input = $input.first().json;
+}`;
+    }
+
+    // --- 35 — Export DOCX: HTTP POST to Render ---
+    if (node.name === '35 — Export DOCX' && node.type === 'n8n-nodes-base.code') {
+        node.parameters.jsCode = `const input = $input.first().json;
 try {
   const result = await $helpers.httpRequest({
     method: 'POST',
     url: '${IP}/export-docx',
-    body: Object.assign({}, input, { executionId: $json.executionId }),
-    json: true
+    body: { executionId: input.executionId, studentName: input.studentName, studentId: input.studentId, programme: input.programme, university: input.university, submissionDate: input.submissionDate, workableTask: input.workableTask, totalWordCount: input.totalWordCount, targetWordCount: input.targetWordCount, docSections: input.docSections },
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120000
   });
-  return [{ json: { ...input, stdout: result.stdout, stderr: result.stderr, returncode: result.returncode } }];
+  return [{ json: { ...input, stdout: result.stdout || '', stderr: result.stderr || '', returncode: result.returncode || 0 } }];
 } catch(e) {
   return [{ json: { ...input, stdout: '', stderr: e.message, returncode: 1 } }];
-}
-`,
-  "39 — Cleanup Temp Files": `
-const input = $input.first().json;
-try {
-  const result = await $helpers.httpRequest({
-    method: 'POST',
-    url: '${IP}/cleanup',
-    body: { executionId: $json.executionId },
-    json: true
-  });
-  return [{ json: { ...input, stdout: result.stdout, stderr: result.stderr, returncode: result.returncode } }];
-} catch(e) {
-  return [{ json: { ...input, stdout: '', stderr: e.message, returncode: 1 } }];
-}
-`
-};
+}`;
+    }
 
-wf.nodes.forEach(node => {
-    if (codeMap[node.name] && node.type === 'n8n-nodes-base.code') {
-        node.parameters.jsCode = codeMap[node.name].trim();
+    // --- 39 — Cleanup: just pass through ---
+    if (node.name === '39 — Cleanup Temp Files' && node.type === 'n8n-nodes-base.code') {
+        node.parameters.jsCode = `const input = $input.first().json;\nreturn [{ json: { ...input, stdout: 'CLEANUP_OK', stderr: '', returncode: 0 } }];`;
     }
 });
 
 fs.writeFileSync(outputPath, JSON.stringify(wf, null, 2));
-console.log('Successfully patched n8n.json -> n8n-cloud-ready.json');
+console.log('Successfully patched n8n.json -> n8n-cloud-ready.json (v3 - HTTP Request nodes for binary data)');
